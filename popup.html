@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Primed Listening Settings</title>
+  <style>
+    body {
+      width: 320px;
+      padding: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f9f9f9;
+      color: #333;
+    }
+
+    h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      color: #2c3e50;
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 10px;
+      font-size: 16px;
+    }
+
+    .section {
+      background: white;
+      padding: 12px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      margin-bottom: 15px;
+      border: 1px solid #eee;
+    }
+
+    .control {
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .control:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 13px;
+      color: #555;
+    }
+
+    input[type="number"] {
+      width: 70px;
+      padding: 6px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    input[type="checkbox"] {
+      cursor: pointer;
+    }
+
+    /* Checkbox Row Styling */
+    .checkbox-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      cursor: pointer;
+    }
+
+    /* Hotkey Input Styling */
+    #hotkey_display {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px;
+      text-align: center;
+      border: 2px solid #ddd;
+      border-radius: 6px;
+      font-weight: bold;
+      color: #444;
+      background: #f4f4f4;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    #hotkey_display:focus {
+      border-color: #2196F3;
+      background: #fff;
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 14px;
+      transition: background-color 0.2s;
+    }
+
+    button:hover {
+      background-color: #1976D2;
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    .note {
+      font-size: 11px;
+      color: #888;
+      margin-top: 6px;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h3>Primed Listening</h3>
+
+  <div class="section">
+    <div class="control">
+      <label for="ppc">Pause per Char (s)</label>
+      <input type="number" id="ppc" step="0.01" min="0.01">
+    </div>
+    <div class="control">
+      <label for="min_pause">Min Pause (s)</label>
+      <input type="number" id="min_pause" step="0.1" min="0.1">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="control">
+      <div class="checkbox-wrapper">
+        <label for="auto_enable">Enable on Startup?</label>
+        <input type="checkbox" id="auto_enable">
+      </div>
+    </div>
+    <div class="control">
+      <div class="checkbox-wrapper">
+        <label for="hide_subs">Hide Subs while Playing?</label>
+        <input type="checkbox" id="hide_subs">
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <label style="display:block; margin-bottom:5px;">Toggle Shortcut</label>
+    <div class="note">Click below and press keys to record</div>
+    <input type="text" id="hotkey_display" readonly value="Alt + P">
+  </div>
+
+  <button id="save">Save Settings</button>
+  <script src="popup.js"></script>
+</body>
+</html>

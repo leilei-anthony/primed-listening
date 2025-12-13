@@ -17,9 +17,10 @@
 let settings = {
     pause_per_char: 0.06,  // Default seconds per character
     min_pause: 0.5,        // Minimum pause duration in seconds
+    max_pause: 2.0,       // Maximum pause duration in seconds (<-- NEW)
     min_chars: 2,          // Minimum characters to trigger a pause
     hide_subs: false,      // User preference: Hide subs while listening?
-    hotkey: {              // Default Toggle Key: Alt + P
+    hotkey: {              // Default Toggle Key: Alt + X
         code: 'KeyP', 
         altKey: true, 
         ctrlKey: false, 
@@ -221,12 +222,14 @@ function loadSettings(callback) {
     chrome.storage.sync.get({ 
         pause_per_char: 0.06, 
         min_pause: 0.5,
+        max_pause: 10.0, // <--- NEW DEFAULT
         auto_enable: true,
         hide_subs: false,
         hotkey: settings.hotkey
     }, (items) => {
         settings.pause_per_char = items.pause_per_char;
         settings.min_pause = items.min_pause;
+        settings.max_pause = items.max_pause; // <--- LOAD
         settings.hotkey = items.hotkey;
         settings.hide_subs = items.hide_subs;
 
@@ -287,8 +290,11 @@ function handleSubtitle(text, video) {
     const chars = getVisibleCharCount(cleanText);
     if (chars < settings.min_chars) return;
 
-    // Calculate pause duration based on text length
-    const duration = Math.max(settings.min_pause, chars * settings.pause_per_char);
+    // Calculate pause duration: Max(min_pause, chars * PPC)
+    let duration = Math.max(settings.min_pause, chars * settings.pause_per_char);
+    
+    // Apply Cap: Min(max_pause, duration)
+    duration = Math.min(settings.max_pause, duration);
     
     // --- EXECUTE PAUSE ---
     state.isAutoPaused = true;

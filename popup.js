@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- DOM Elements ---
   const ppcInput = document.getElementById('ppc');
   const minPauseInput = document.getElementById('min_pause');
+  const maxPauseInput = document.getElementById('max_pause'); // <--- NEW
   const autoEnableInput = document.getElementById('auto_enable');
   const hideSubsInput = document.getElementById('hide_subs');
   const hotkeyDisplay = document.getElementById('hotkey_display');
@@ -16,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     altKey: true, 
     shiftKey: false, 
     metaKey: false, 
-    display: 'Alt + P' 
+    display: 'Alt + X' 
   };
 
   /**
@@ -25,12 +26,14 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.sync.get({ 
     pause_per_char: 0.06, 
     min_pause: 0.5,
+    max_pause: 10.0, // <--- NEW DEFAULT
     auto_enable: true,
     hide_subs: false,
     hotkey: currentHotkey
   }, (items) => {
     ppcInput.value = items.pause_per_char;
     minPauseInput.value = items.min_pause;
+    maxPauseInput.value = items.max_pause; // <--- LOAD VALUE
     autoEnableInput.checked = items.auto_enable;
     hideSubsInput.checked = items.hide_subs;
     
@@ -42,29 +45,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /**
    * 2. Hotkey Recorder Logic
-   * Captures key combinations when the input field is focused.
    */
   hotkeyDisplay.addEventListener('keydown', (e) => {
     e.preventDefault(); 
     e.stopPropagation();
 
-    // Ignore standalone modifier key presses
     if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
 
-    // Build the display string (e.g., "Ctrl + Shift + K")
     const parts = [];
     if (e.ctrlKey) parts.push('Ctrl');
     if (e.altKey) parts.push('Alt');
     if (e.shiftKey) parts.push('Shift');
     if (e.metaKey) parts.push('Cmd');
     
-    // Clean up the key code (e.g., "KeyP" -> "P")
     const cleanKey = e.code.replace('Key', '').replace('Digit', '');
     parts.push(cleanKey);
     
     const displayString = parts.join(' + ');
 
-    // Update state
     currentHotkey = { 
       code: e.code, 
       ctrlKey: e.ctrlKey, 
@@ -79,17 +77,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /**
    * 3. Save Settings
-   * Saves to storage and notifies the active tab to update immediately.
    */
   saveBtn.addEventListener('click', () => {
     chrome.storage.sync.set({ 
       pause_per_char: parseFloat(ppcInput.value), 
       min_pause: parseFloat(minPauseInput.value),
+      max_pause: parseFloat(maxPauseInput.value), // <--- SAVE VALUE
       auto_enable: autoEnableInput.checked,
       hide_subs: hideSubsInput.checked,
       hotkey: currentHotkey
     }, () => {
-      // Notify the active tab to reload settings without refreshing
       chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
         if (tabs[0]) {
           chrome.tabs.sendMessage(tabs[0].id, { type: 'UPDATE_SETTINGS' });

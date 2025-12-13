@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Primed Listening",
-  "version": "1.0.1",
+  "name": "Kiku: Primed Listening",
+  "version": "1.0.0",
   "description": "Automatically pauses video playback after subtitles to aid in language learning via the 'Primed Listening' technique.",
   "permissions": [
     "storage",
-    "activeTab",
-    "scripting"
+    "activeTab"
   ],
   "host_permissions": [
     "*://*.youtube.com/*",

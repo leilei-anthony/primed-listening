@@ -2,52 +2,111 @@
 
 /**
  * Primed Listening - Content Script
- * * Handles DOM observation, subtitle extraction, and playback control 
- * for YouTube and Netflix.
+ * * Purpose:
+ * 1. Monitors video playback on YouTube and Netflix.
+ * 2. Detects subtitle changes via MutationObserver.
+ * 3. Pauses video automatically after a subtitle line is completed.
+ * 4. Hides specific UI elements (Netflix overlays, ratings, controls) to provide
+ * a seamless "cinematic" study experience.
  */
 
-// --- CONFIGURATION & STATE ---
+// ==========================================
+// 1. CONFIGURATION & STATE MANAGEMENT
+// ==========================================
+
 let settings = {
-    pause_per_char: 0.06,
-    min_pause: 0.5,
-    min_chars: 2,
-    hide_subs: false,
-    hotkey: { code: 'KeyP', altKey: true, ctrlKey: false, shiftKey: false, metaKey: false }
+    pause_per_char: 0.06,  // Default seconds per character
+    min_pause: 0.5,        // Minimum pause duration in seconds
+    min_chars: 2,          // Minimum characters to trigger a pause
+    hide_subs: false,      // User preference: Hide subs while listening?
+    hotkey: {              // Default Toggle Key: Alt + P
+        code: 'KeyP', 
+        altKey: true, 
+        ctrlKey: false, 
+        shiftKey: false, 
+        metaKey: false 
+    }
 };
 
 let state = {
-    enabled: false,       // Master toggle
+    enabled: false,       // Master extension toggle
     isAutoPaused: false,  // Is the script currently holding a pause?
-    isPauseLocked: false, // Did user manually extend the pause?
-    timerId: null,        // Reference to the resume timer
-    lastSubText: ""       // Deduplication buffer
+    isPauseLocked: false, // Did user manually extend the pause (Lock Mode)?
+    timerId: null,        // Reference to the active resume timer
+    lastSubText: "",      // Buffer to prevent duplicate pauses on the same line
+    uiHidden: false       // Track if we are currently forcing the Netflix UI to hide
 };
 
-// --- CSS INJECTION ---
-// Injects styles to hide subtitles during playback if the feature is enabled.
+
+// ==========================================
+// 2. CSS INJECTION
+// ==========================================
+// We inject dynamic CSS to handle subtitle visibility and to suppress 
+// Netflix's aggressive UI overlays during auto-pauses.
+
 const style = document.createElement('style');
 style.innerHTML = `
+  /* --- Feature: Hide Subtitles (during playback) --- */
   .pl-hidden-sub { opacity: 0 !important; }
   .pl-show-sub { opacity: 1 !important; }
+
+  /* --- Feature: Netflix UI Suppression (The "Nuclear" List) --- */
+  /* Targets every layer of the Netflix interface to prevent flashing 
+     controls or rating warnings when the script pauses/resumes. */
+  
+  /* 1. Content Warnings & Ratings (e.g., "Rated 16+") */
+  .pl-netflix-ui-hidden .evidence-overlay,
+  .pl-netflix-ui-hidden .advisory,
+  .pl-netflix-ui-hidden div[data-uia="advisory-info"],
+  .pl-netflix-ui-hidden div[data-uia="content-warning"],
+
+  /* 2. Top Controls (Back Arrow, Flag Report) */
+  .pl-netflix-ui-hidden .watch-video--back-container,
+  .pl-netflix-ui-hidden .watch-video--flag-container,
+
+  /* 3. Bottom Controls (Timeline, Volume, Episode Select) */
+  .pl-netflix-ui-hidden .watch-video--bottom-controls-container,
+  .pl-netflix-ui-hidden div[data-uia="controls-standard"],
+  
+  /* 4. General Overlays, Touch Layers & Center Animations */
+  .pl-netflix-ui-hidden .nfp-chrome-controls,
+  .pl-netflix-ui-hidden .PlayerControlsNeo__layout, 
+  .pl-netflix-ui-hidden .touch-overlay,
+  .pl-netflix-ui-hidden .watch-video--player-view-overlay,
+  .pl-netflix-ui-hidden div[data-uia="player-gui"],
+  .pl-netflix-ui-hidden div[data-uia="player-status-animation"], /* Center Play/Pause Icon */
+  .pl-netflix-ui-hidden .player-status-main,
+  .pl-netflix-ui-hidden .button-layer
+  {
+      opacity: 0 !important;
+      display: none !important;
+      visibility: hidden !important;
+  }
 `;
 document.head.appendChild(style);
 
 
-// --- PLATFORM SELECTORS ---
-// Definitions for finding video elements and subtitle text on supported sites.
+// ==========================================
+// 3. PLATFORM SELECTORS
+// ==========================================
+// Definitions for locating video elements, subtitle text, and UI containers
+// specific to YouTube and Netflix.
+
 const PLATFORMS = {
     youtube: {
         root: '#movie_player', 
         video: 'video',
-        // Target multiple caption containers to be safe
         subContainer: '.ytp-caption-window-bottom, .ytp-caption-window-container',
         getText: () => {
-            // YouTube splits text into segments; we join them for full context.
+            // YouTube splits captions into segments; join them for full context.
             const segments = document.querySelectorAll('.ytp-caption-segment');
             if (segments && segments.length > 0) {
                 return Array.from(segments).map(s => s.innerText).join(" ");
             }
             return "";
+        },
+        toggleUI: (hide) => { 
+            // YouTube's UI is generally less obtrusive; no custom hiding needed.
         }
     },
     netflix: {
@@ -55,38 +114,52 @@ const PLATFORMS = {
         video: 'video',
         subContainer: '.player-timedtext',
         getText: () => {
-            // Netflix selectors vary; try the most common text containers.
+            // Netflix uses various containers depending on player version.
             const container = document.querySelector('.player-timedtext-text-container');
             if (container) return container.innerText;
             const span = document.querySelector('.player-timedtext');
             if (span) return span.innerText;
             return "";
+        },
+        toggleUI: (hide) => {
+            // Toggles the "pl-netflix-ui-hidden" class on the main wrapper
+            const wrapper = document.querySelector('.nfp-app-player-wrapper') || document.body;
+            if (hide) {
+                wrapper.classList.add('pl-netflix-ui-hidden');
+                state.uiHidden = true;
+            } else {
+                wrapper.classList.remove('pl-netflix-ui-hidden');
+                state.uiHidden = false;
+            }
         }
     }
 };
 
+// Determine current site once on load
 const currentPlatform = window.location.hostname.includes('netflix') 
     ? PLATFORMS.netflix 
     : PLATFORMS.youtube;
 
 
-// --- UTILITIES ---
+// ==========================================
+// 4. UTILITY FUNCTIONS
+// ==========================================
 
 /**
- * Calculates the number of "visible" characters, ignoring whitespace/brackets.
- * Useful for ignoring control characters or empty subtitle lines.
+ * Calculates the "visible" length of a subtitle string, removing 
+ * control characters, newlines, and brackets (e.g., [Music], (Laughs)).
  */
 function getVisibleCharCount(text) {
     if (!text) return 0;
     let clean = text.replace(/[\n\r]/g, "")
                     .replace(/\s+/g, "")
-                    .replace(/\{.*?\}/g, "")         // ASS/SSA style brackets
+                    .replace(/\{.*?\}/g, "")         // ASS/SSA style
                     .replace(/\(.*?\)|\（.*?\）/g, ""); // Parentheses
     return clean.length;
 }
 
 /**
- * Displays a temporary On-Screen Display (OSD) message.
+ * Displays a temporary On-Screen Display (OSD) message to the user.
  */
 function showOSD(message) {
     let osd = document.getElementById('pl-osd');
@@ -94,36 +167,25 @@ function showOSD(message) {
         osd = document.createElement('div');
         osd.id = 'pl-osd';
         Object.assign(osd.style, {
-            position: 'absolute', 
-            top: '10%', 
-            left: '50%', 
-            transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(0,0,0,0.8)', 
-            color: '#FFF', 
-            padding: '12px 24px',
-            borderRadius: '8px', 
-            zIndex: 2147483647, 
-            fontSize: '20px', 
-            pointerEvents: 'none',
-            fontFamily: 'sans-serif', 
-            fontWeight: 'bold', 
-            boxShadow: '0 2px 10px rgba(0,0,0,0.5)'
+            position: 'absolute', top: '10%', left: '50%', transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(0,0,0,0.8)', color: '#FFF', padding: '12px 24px',
+            borderRadius: '8px', zIndex: 2147483647, fontSize: '20px', pointerEvents: 'none',
+            fontFamily: 'sans-serif', fontWeight: 'bold', boxShadow: '0 2px 10px rgba(0,0,0,0.5)'
         });
         document.body.appendChild(osd);
     }
     osd.innerText = message;
     osd.style.display = 'block';
     
+    // Reset fade-out timer
     if (osd.hideTimer) clearTimeout(osd.hideTimer);
     osd.hideTimer = setTimeout(() => { osd.style.display = 'none'; }, 2000);
 }
 
 /**
- * Toggles the visibility of subtitles using CSS classes.
- * @param {boolean} forceVisible - If true, ensures subs are visible.
+ * Controls subtitle visibility based on the user's "Hide Subs" preference.
  */
 function toggleSubtitles(forceVisible) {
-    // Only modify DOM if the "Hide Subs" feature is active or we are resetting
     if (!settings.hide_subs && forceVisible !== true) return;
 
     const nodes = document.querySelectorAll(currentPlatform.subContainer);
@@ -138,9 +200,23 @@ function toggleSubtitles(forceVisible) {
     });
 }
 
+/**
+ * Restores UI visibility if it was hidden, triggered by user interaction.
+ */
+function restoreUI() {
+    if (state.uiHidden && currentPlatform.toggleUI) {
+        currentPlatform.toggleUI(false);
+    }
+}
 
-// --- CORE LOGIC ---
 
+// ==========================================
+// 5. CORE LOGIC
+// ==========================================
+
+/**
+ * Loads settings from Chrome Storage and updates local state.
+ */
 function loadSettings(callback) {
     chrome.storage.sync.get({ 
         pause_per_char: 0.06, 
@@ -159,27 +235,36 @@ function loadSettings(callback) {
             callback();
         }
         
-        // Sync subtitle visibility state immediately
+        // Apply initial subtitle visibility state
         if (state.enabled && settings.hide_subs && !state.isAutoPaused) {
-            toggleSubtitles(false); // Hide
+            toggleSubtitles(false); 
         } else {
-            toggleSubtitles(true);  // Show
+            toggleSubtitles(true);
         }
     });
 }
 
+/**
+ * Resumes video playback after the calculated pause duration.
+ */
 function resumePlayback(video) {
     if (state.timerId) clearTimeout(state.timerId);
     state.timerId = null;
     state.isAutoPaused = false;
     state.isPauseLocked = false;
     
-    // Ensure subs are hidden again when playback resumes
+    // Note: We intentionally leave the Netflix UI hidden here to prevent
+    // the "Play" animation flash. It will be restored by mouse movement.
+
+    // Hide subs again if the setting is enabled
     if (settings.hide_subs) toggleSubtitles(false);
 
     video.play().catch(() => { /* Ignore play interruptions */ });
 }
 
+/**
+ * Locks the pause state, preventing auto-resume until the user intervenes.
+ */
 function lockPause() {
     if (state.timerId) {
         clearTimeout(state.timerId);
@@ -189,6 +274,9 @@ function lockPause() {
     showOSD("|| Pause Locked");
 }
 
+/**
+ * Main handler: Triggered when a new subtitle line is detected.
+ */
 function handleSubtitle(text, video) {
     if (!state.enabled || !text) return;
     
@@ -199,14 +287,18 @@ function handleSubtitle(text, video) {
     const chars = getVisibleCharCount(cleanText);
     if (chars < settings.min_chars) return;
 
-    // Calculate pause duration
+    // Calculate pause duration based on text length
     const duration = Math.max(settings.min_pause, chars * settings.pause_per_char);
     
-    // EXECUTE PAUSE
+    // --- EXECUTE PAUSE ---
     state.isAutoPaused = true;
+
+    // Force Hide Netflix UI (Control bars, ratings, etc.)
+    if (currentPlatform.toggleUI) currentPlatform.toggleUI(true);
+
     video.pause();
     
-    // Reveal subs during the pause (if hidden)
+    // Reveal subtitles for reading
     if (settings.hide_subs) toggleSubtitles(true);
 
     // Schedule resume
@@ -216,29 +308,32 @@ function handleSubtitle(text, video) {
 }
 
 
-// --- INITIALIZATION ---
+// ==========================================
+// 6. INITIALIZATION & EVENTS
+// ==========================================
 
 function startObserver() {
     const video = document.querySelector(currentPlatform.video);
-    // Use platform-specific root or fallback to body
     const rootNode = document.querySelector(currentPlatform.root) || document.body;
 
     if (!video) {
-        // Video not ready? Retry shortly.
+        // Video element not ready yet? Retry in 1 second.
         setTimeout(startObserver, 1000);
         return;
     }
 
-    // Initialize Settings
+    // Load initial settings
     loadSettings(() => {
         if (state.enabled) showOSD("Primed Listening Ready");
     });
 
-    // 1. Keyboard Listener
+    // --- A. KEYBOARD LISTENERS ---
     document.addEventListener('keydown', (e) => {
-        const h = settings.hotkey;
-        
+        // Any key press indicates user presence; restore UI.
+        restoreUI();
+
         // Check for Custom Hotkey (Toggle ON/OFF)
+        const h = settings.hotkey;
         if (e.code === h.code && 
             e.ctrlKey === h.ctrlKey && 
             e.altKey === h.altKey && 
@@ -252,8 +347,9 @@ function startObserver() {
                  // Clean up if disabled while active
                  if (state.isAutoPaused) resumePlayback(video);
                  toggleSubtitles(true); // Force subs visible
+                 restoreUI();           // Force UI visible
              } else {
-                 // Apply hide setting if enabling
+                 // Apply hiding logic if enabling
                  if (settings.hide_subs) toggleSubtitles(false);
              }
              return;
@@ -273,9 +369,24 @@ function startObserver() {
                 resumePlayback(video);
             }
         }
-    }, true); // Capture phase to intercept keys before player
+    }, true);
 
-    // 2. Mutation Observer (Subtitle Detector)
+    // --- B. MOUSE LISTENER ---
+    // Restore UI on mouse movement (throttled for performance)
+    let mouseTimer = null;
+    document.addEventListener('mousemove', () => {
+        // Only restore UI if we are NOT in an auto-pause.
+        // If we are auto-paused, we want the screen clean.
+        if (!state.isAutoPaused) {
+             if (!mouseTimer) {
+                 restoreUI();
+                 mouseTimer = setTimeout(() => mouseTimer = null, 200);
+             }
+        }
+    }, { passive: true });
+
+    // --- C. MUTATION OBSERVER ---
+    // Watches for changes in the DOM to detect subtitles
     const observer = new MutationObserver((mutations) => {
         if (!state.enabled || (video.paused && !state.isAutoPaused)) return;
         
@@ -285,7 +396,7 @@ function startObserver() {
                 handleSubtitle(text, video);
             }
         } catch (error) {
-            // Silently ignore DOM errors to prevent console spam on complex pages
+            // Silently ignore minor DOM errors during page transitions
         }
     });
 
@@ -296,12 +407,12 @@ function startObserver() {
     });
 }
 
-// Listen for updates from the Popup UI
+// Listen for settings updates from the Popup
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'UPDATE_SETTINGS') {
         loadSettings(null);
     }
 });
 
-// Boot up
+// Start the engine
 startObserver();
